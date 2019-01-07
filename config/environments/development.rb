@@ -1,4 +1,5 @@
 Discourse::Application.configure do
+
   # Settings specified here will take precedence over those in config/application.rb
 
   # In the development environment your application's code is reloaded on
@@ -28,7 +29,6 @@ Discourse::Application.configure do
   config.active_record.migration_error = :page_load
   config.watchable_dirs['lib'] = [:rb]
 
-  config.sass.debug_info = false
   config.handlebars.precompile = false
 
   # we recommend you use mailcatcher https://github.com/sj26/mailcatcher
@@ -49,6 +49,19 @@ Discourse::Application.configure do
   require 'rbtrace'
 
   if emails = GlobalSetting.developer_emails
-    config.developer_emails = emails.split(",").map(&:strip)
+    config.developer_emails = emails.split(",").map(&:downcase).map(&:strip)
+  end
+
+  if defined?(Rails::Server) || defined?(Puma) || defined?(Unicorn)
+    require 'stylesheet/watcher'
+    STDERR.puts "Starting CSS change watcher"
+    @watcher = Stylesheet::Watcher.watch
+  end
+
+  config.after_initialize do
+    if ENV['BULLET']
+      Bullet.enable = true
+      Bullet.rails_logger = true
+    end
   end
 end

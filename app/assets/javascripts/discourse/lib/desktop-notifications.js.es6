@@ -1,5 +1,6 @@
-import DiscourseURL from 'discourse/lib/url';
-import PageTracker from 'discourse/lib/page-tracker';
+import DiscourseURL from "discourse/lib/url";
+import KeyValueStore from "discourse/lib/key-value-store";
+import { formatUsername } from "discourse/lib/utilities";
 
 let primaryTab = false;
 let liveEnabled = false;
@@ -10,8 +11,11 @@ let lastAction = -1;
 const focusTrackerKey = "focus-tracker";
 const idleThresholdTime = 1000 * 10; // 10 seconds
 
+const context = "discourse_desktop_notifications_";
+const keyValueStore = new KeyValueStore(context);
+
 // Called from an initializer
-function init(messageBus) {
+function init(messageBus, appEvents) {
   liveEnabled = false;
   mbClientId = messageBus.clientId;
 
@@ -20,14 +24,18 @@ function init(messageBus) {
   }
 
   try {
-    localStorage.getItem(focusTrackerKey);
+    keyValueStore.getItem(focusTrackerKey);
   } catch (e) {
-    Em.Logger.info('Discourse desktop notifications are disabled - localStorage denied.');
+    Em.Logger.info(
+      "Discourse desktop notifications are disabled - localStorage denied."
+    );
     return;
   }
 
   if (!("Notification" in window)) {
-    Em.Logger.info('Discourse desktop notifications are disabled - not supported by browser');
+    Em.Logger.info(
+      "Discourse desktop notifications are disabled - not supported by browser"
+    );
     return;
   }
 
@@ -39,25 +47,50 @@ function init(messageBus) {
       return;
     }
   } catch (e) {
-    Em.Logger.warn('Unexpected error, Notification is defined on window but not a responding correctly ' + e);
+    Em.Logger.warn(
+      "Unexpected error, Notification is defined on window but not a responding correctly " +
+        e
+    );
   }
 
   liveEnabled = true;
   try {
     // Preliminary checks passed, continue with setup
-    setupNotifications();
+    setupNotifications(appEvents);
   } catch (e) {
     Em.Logger.error(e);
   }
 }
 
-// This function is only called if permission was granted
-function setupNotifications() {
+function confirmNotification() {
+  const notification = new Notification(
+    I18n.t("notifications.popup.confirm_title", {
+      site_title: Discourse.SiteSettings.title
+    }),
+    {
+      body: I18n.t("notifications.popup.confirm_body"),
+      icon:
+        Discourse.SiteSettings.site_logo_small_url ||
+        Discourse.SiteSettings.site_logo_url,
+      tag: "confirm-subscription"
+    }
+  );
 
+  const clickEventHandler = () => notification.close();
+
+  notification.addEventListener("click", clickEventHandler);
+  Ember.run.later(() => {
+    notification.close();
+    notification.removeEventListener("click", clickEventHandler);
+  }, 10 * 1000);
+}
+
+// This function is only called if permission was granted
+function setupNotifications(appEvents) {
   window.addEventListener("storage", function(e) {
     // note: This event only fires when other tabs setItem()
     const key = e.key;
-    if (key !== focusTrackerKey) {
+    if (key !== `${context}${focusTrackerKey}`) {
       return true;
     }
     primaryTab = false;
@@ -66,21 +99,26 @@ function setupNotifications() {
   window.addEventListener("focus", function() {
     if (!primaryTab) {
       primaryTab = true;
-      localStorage.setItem(focusTrackerKey, mbClientId);
+      keyValueStore.setItem(focusTrackerKey, mbClientId);
     }
   });
 
-  if (document && (typeof document.hidden !== "undefined") && document["hidden"]) {
+  if (
+    document &&
+    typeof document.hidden !== "undefined" &&
+    document["hidden"]
+  ) {
     primaryTab = false;
   } else {
     primaryTab = true;
-    localStorage.setItem(focusTrackerKey, mbClientId);
+    keyValueStore.setItem(focusTrackerKey, mbClientId);
   }
 
   if (document) {
     document.addEventListener("scroll", resetIdle);
   }
-  PageTracker.on("change", resetIdle);
+
+  appEvents.on("page:changed", resetIdle);
 }
 
 function resetIdle() {
@@ -92,20 +130,36 @@ function isIdle() {
 
 // Call-in point from message bus
 function onNotification(data) {
-  if (!liveEnabled) { return; }
-  if (!primaryTab) { return; }
-  if (!isIdle()) { return; }
-  if (localStorage.getItem('notifications-disabled')) { return; }
+  if (!liveEnabled) {
+    return;
+  }
+  if (!primaryTab) {
+    return;
+  }
+  if (!isIdle()) {
+    return;
+  }
+  if (keyValueStore.getItem("notifications-disabled")) {
+    return;
+  }
 
   const notificationTitle = I18n.t(i18nKey(data.notification_type), {
-     site_title: Discourse.SiteSettings.title,
-     topic: data.topic_title,
-     username: data.username
+    site_title: Discourse.SiteSettings.title,
+    topic: data.topic_title,
+    username: formatUsername(data.username)
   });
 
   const notificationBody = data.excerpt;
-  const notificationIcon = Discourse.SiteSettings.logo_small_url || Discourse.SiteSettings.logo_url;
-  const notificationTag = "discourse-notification-" + Discourse.SiteSettings.title + "-" + data.topic_id;
+
+  const notificationIcon =
+    Discourse.SiteSettings.site_logo_small_url ||
+    Discourse.SiteSettings.site_logo_url;
+
+  const notificationTag =
+    "discourse-notification-" +
+    Discourse.SiteSettings.title +
+    "-" +
+    data.topic_id;
 
   requestPermission().then(function() {
     // This shows the notification!
@@ -122,10 +176,10 @@ function onNotification(data) {
       window.focus();
     }
 
-    notification.addEventListener('click', clickEventHandler);
-    setTimeout(function() {
+    notification.addEventListener("click", clickEventHandler);
+    Ember.run.later(() => {
       notification.close();
-      notification.removeEventListener('click', clickEventHandler);
+      notification.removeEventListener("click", clickEventHandler);
     }, 10 * 1000);
   });
 }
@@ -151,9 +205,30 @@ function requestPermission() {
 }
 
 function i18nKey(notification_type) {
-  return "notifications.popup." + Discourse.Site.current().get("notificationLookup")[notification_type];
+  return (
+    "notifications.popup." +
+    Discourse.Site.current().get("notificationLookup")[notification_type]
+  );
 }
 
-// Exported for controllers/notification.js.es6
+function alertChannel(user) {
+  return `/notification-alert/${user.get("id")}`;
+}
 
-export { init, onNotification };
+function unsubscribe(bus, user) {
+  bus.unsubscribe(alertChannel(user));
+}
+
+function disable() {
+  keyValueStore.setItem("notifications-disabled", "disabled");
+}
+
+export {
+  context,
+  init,
+  onNotification,
+  unsubscribe,
+  alertChannel,
+  confirmNotification,
+  disable
+};

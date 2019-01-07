@@ -1,81 +1,150 @@
-import { exportUserArchive } from 'discourse/lib/export-csv';
-import CanCheckEmails from 'discourse/mixins/can-check-emails';
+import CanCheckEmails from "discourse/mixins/can-check-emails";
+import computed from "ember-addons/ember-computed-decorators";
+import User from "discourse/models/user";
+import optionalService from "discourse/lib/optional-service";
 
 export default Ember.Controller.extend(CanCheckEmails, {
   indexStream: false,
-  pmView: false,
-  userActionType: null,
-  needs: ['user-notifications', 'user-topics-list'],
+  application: Ember.inject.controller(),
+  userNotifications: Ember.inject.controller("user-notifications"),
+  currentPath: Ember.computed.alias("application.currentPath"),
+  adminTools: optionalService(),
 
-  viewingSelf: function() {
-    return this.get('content.username') === Discourse.User.currentProp('username');
-  }.property('content.username'),
+  @computed("model.username")
+  viewingSelf(username) {
+    let currentUser = this.currentUser;
+    return currentUser && username === currentUser.get("username");
+  },
 
-  collapsedInfo: Em.computed.not('indexStream'),
+  @computed("viewingSelf", "model.profile_hidden")
+  canExpandProfile(viewingSelf, profileHidden) {
+    return !profileHidden && viewingSelf;
+  },
 
-  linkWebsite: Em.computed.not('model.isBasic'),
+  @computed("model.profileBackground")
+  hasProfileBackground(background) {
+    return !Ember.isEmpty(background.toString());
+  },
 
-  removeNoFollow: function() {
-    return this.get('model.trust_level') > 2 && !this.siteSettings.tl3_links_no_follow;
-  }.property('model.trust_level'),
-
-  canSeePrivateMessages: Ember.computed.or('viewingSelf', 'currentUser.admin'),
-  canSeeNotificationHistory: Em.computed.alias('canSeePrivateMessages'),
-
-  showBadges: function() {
-    return Discourse.SiteSettings.enable_badges && (this.get('content.badge_count') > 0);
-  }.property('content.badge_count'),
-
-  privateMessageView: function() {
-    return (this.get('userActionType') === Discourse.UserAction.TYPES.messages_sent) ||
-           (this.get('userActionType') === Discourse.UserAction.TYPES.messages_received);
-  }.property('userActionType'),
-
-  canInviteToForum: function() {
-    return Discourse.User.currentProp('can_invite_to_forum');
-  }.property(),
-
-  canDeleteUser: function() {
-    return this.get('model.can_be_deleted') && this.get('model.can_delete_all_posts');
-  }.property('model.can_be_deleted', 'model.can_delete_all_posts'),
-
-  publicUserFields: function() {
-    var siteUserFields = this.site.get('user_fields');
-    if (!Ember.isEmpty(siteUserFields)) {
-      var userFields = this.get('model.user_fields');
-      return siteUserFields.filterProperty('show_on_profile', true).sortBy('id').map(function(uf) {
-        var val = userFields ? userFields[uf.get('id').toString()] : null;
-        if (Ember.isEmpty(val)) {
-          return null;
-        } else {
-          return Ember.Object.create({value: val, field: uf});
-        }
-      }).compact();
+  @computed("model.profile_hidden", "indexStream", "viewingSelf", "forceExpand")
+  collapsedInfo(profileHidden, indexStream, viewingSelf, forceExpand) {
+    if (profileHidden) {
+      return true;
     }
-  }.property('model.user_fields.@each.value'),
+    return (!indexStream || viewingSelf) && !forceExpand;
+  },
 
-  privateMessagesActive: Em.computed.equal('pmView', 'index'),
-  privateMessagesMineActive: Em.computed.equal('pmView', 'mine'),
-  privateMessagesUnreadActive: Em.computed.equal('pmView', 'unread'),
+  hasGivenFlags: Ember.computed.gt("model.number_of_flags_given", 0),
+  hasFlaggedPosts: Ember.computed.gt("model.number_of_flagged_posts", 0),
+  hasDeletedPosts: Ember.computed.gt("model.number_of_deleted_posts", 0),
+  hasBeenSuspended: Ember.computed.gt("model.number_of_suspensions", 0),
+  hasReceivedWarnings: Ember.computed.gt("model.warnings_received_count", 0),
+
+  showStaffCounters: Ember.computed.or(
+    "hasGivenFlags",
+    "hasFlaggedPosts",
+    "hasDeletedPosts",
+    "hasBeenSuspended",
+    "hasReceivedWarnings"
+  ),
+
+  @computed("model.suspended", "currentUser.staff")
+  isNotSuspendedOrIsStaff(suspended, isStaff) {
+    return !suspended || isStaff;
+  },
+
+  linkWebsite: Em.computed.not("model.isBasic"),
+
+  @computed("model.trust_level")
+  removeNoFollow(trustLevel) {
+    return trustLevel > 2 && !this.siteSettings.tl3_links_no_follow;
+  },
+
+  @computed("viewingSelf", "currentUser.admin")
+  showBookmarks(viewingSelf, isAdmin) {
+    return viewingSelf || isAdmin;
+  },
+
+  @computed("viewingSelf")
+  showDrafts(viewingSelf) {
+    return viewingSelf;
+  },
+
+  @computed("viewingSelf", "currentUser.admin")
+  showPrivateMessages(viewingSelf, isAdmin) {
+    return (
+      this.siteSettings.enable_personal_messages && (viewingSelf || isAdmin)
+    );
+  },
+
+  @computed("viewingSelf", "currentUser.staff")
+  showNotificationsTab(viewingSelf, staff) {
+    return viewingSelf || staff;
+  },
+
+  @computed("model.name")
+  nameFirst(name) {
+    return (
+      !this.get("siteSettings.prioritize_username_in_ux") &&
+      name &&
+      name.trim().length > 0
+    );
+  },
+
+  @computed("model.badge_count")
+  showBadges(badgeCount) {
+    return Discourse.SiteSettings.enable_badges && badgeCount > 0;
+  },
+
+  @computed()
+  canInviteToForum() {
+    return User.currentProp("can_invite_to_forum");
+  },
+
+  canDeleteUser: Ember.computed.and(
+    "model.can_be_deleted",
+    "model.can_delete_all_posts"
+  ),
+
+  @computed("model.user_fields.@each.value")
+  publicUserFields() {
+    const siteUserFields = this.site.get("user_fields");
+    if (!Ember.isEmpty(siteUserFields)) {
+      const userFields = this.get("model.user_fields");
+      return siteUserFields
+        .filterBy("show_on_profile", true)
+        .sortBy("position")
+        .map(field => {
+          Ember.set(field, "dasherized_name", field.get("name").dasherize());
+          const value = userFields
+            ? userFields[field.get("id").toString()]
+            : null;
+          return Ember.isEmpty(value)
+            ? null
+            : Ember.Object.create({ value, field });
+        })
+        .compact();
+    }
+  },
 
   actions: {
-    adminDelete: function() {
-      Discourse.AdminUser.find(this.get('model.username').toLowerCase()).then(function(user){
-        user.destroy({deletePosts: true});
+    collapseProfile() {
+      this.set("forceExpand", false);
+    },
+
+    expandProfile() {
+      this.set("forceExpand", true);
+    },
+
+    showSuspensions() {
+      this.get("adminTools").showActionLogs(this, {
+        target_user: this.get("model.username"),
+        action_name: "suspend_user"
       });
     },
 
-    exportUserArchive: function() {
-      bootbox.confirm(
-        I18n.t("admin.export_csv.user_archive_confirm"),
-        I18n.t("no_value"),
-        I18n.t("yes_value"),
-        function(confirmed) {
-          if (confirmed) {
-            exportUserArchive();
-          }
-        }
-      );
+    adminDelete() {
+      this.get("adminTools").deleteUser(this.get("model.id"));
     }
   }
 });

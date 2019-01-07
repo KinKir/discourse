@@ -1,4 +1,4 @@
-require 'spec_helper'
+require 'rails_helper'
 
 describe SpamRulesEnforcer do
 
@@ -19,8 +19,8 @@ describe SpamRulesEnforcer do
     context 'user argument' do
       subject(:enforce) { described_class.enforce!(Fabricate.build(:user)) }
 
-      it 'performs the AutoBlock' do
-        SpamRule::AutoBlock.any_instance.expects(:perform).once
+      it 'performs the AutoSilence' do
+        SpamRule::AutoSilence.any_instance.expects(:perform).once
         enforce
       end
     end

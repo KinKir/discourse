@@ -18,7 +18,7 @@ class About
   end
 
   def https
-    SiteSetting.use_https
+    SiteSetting.force_https
   end
 
   def title
@@ -35,14 +35,12 @@ class About
 
   def moderators
     @moderators ||= User.where(moderator: true, admin: false)
-                        .where.not(id: Discourse::SYSTEM_USER_ID)
-                        .order(:username_lower)
+      .human_users
+      .order(:username_lower)
   end
 
   def admins
-    @admins ||= User.where(admin: true)
-                    .where.not(id: Discourse::SYSTEM_USER_ID)
-                    .order(:username_lower)
+    @admins ||= User.where(admin: true).human_users.order(:username_lower)
   end
 
   def stats

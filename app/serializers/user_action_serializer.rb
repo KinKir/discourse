@@ -1,8 +1,10 @@
+require_relative 'post_item_excerpt'
+
 class UserActionSerializer < ApplicationSerializer
+  include PostItemExcerpt
 
   attributes :action_type,
              :created_at,
-             :excerpt,
              :avatar_template,
              :acting_avatar_template,
              :slug,
@@ -24,17 +26,11 @@ class UserActionSerializer < ApplicationSerializer
              :hidden,
              :post_type,
              :action_code,
+             :action_code_who,
              :edit_reason,
              :category_id,
-             :uploaded_avatar_id,
              :closed,
-             :archived,
-             :acting_uploaded_avatar_id
-
-  def excerpt
-    cooked = object.cooked || PrettyText.cook(object.raw)
-    PrettyText.excerpt(cooked, 300, keep_emojis: true) if cooked
-  end
+             :archived
 
   def avatar_template
     User.avatar_template(object.username, object.uploaded_avatar_id)
@@ -82,6 +78,14 @@ class UserActionSerializer < ApplicationSerializer
 
   def archived
     object.topic_archived
+  end
+
+  def include_action_code_who?
+    action_code_who.present?
+  end
+
+  def action_code_who
+    object.action_code_who
   end
 
 end

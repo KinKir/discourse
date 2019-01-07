@@ -1,12 +1,11 @@
-import { buildCategoryPanel } from 'discourse/components/edit-category-panel';
+import { buildCategoryPanel } from "discourse/components/edit-category-panel";
 
-export default buildCategoryPanel('topic-template', {
+export default buildCategoryPanel("topic-template", {
   _activeTabChanged: function() {
-    if (this.get('activeTab')) {
-      const self = this;
-      Ember.run.schedule('afterRender', function() {
-        self.$('.wmd-input').focus();
-      });
+    if (this.get("activeTab")) {
+      Ember.run.scheduleOnce("afterRender", () =>
+        this.$(".d-editor-input").focus()
+      );
     }
-  }.observes('activeTab')
+  }.observes("activeTab")
 });

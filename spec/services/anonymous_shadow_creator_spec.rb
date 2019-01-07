@@ -1,4 +1,4 @@
-require 'spec_helper'
+require 'rails_helper'
 
 describe AnonymousShadowCreator do
 
@@ -10,10 +10,15 @@ describe AnonymousShadowCreator do
 
     before { SiteSetting.allow_anonymous_posting = true }
 
-    let(:user) { Fabricate(:user, trust_level: 3) }
+    let(:user) { Fabricate(:user_single_email, trust_level: 3) }
 
     it "returns no shadow if trust level is not met" do
       expect(AnonymousShadowCreator.get(Fabricate.build(:user, trust_level: 0))).to eq(nil)
+    end
+
+    it "returns no shadow if must_approve_users is true and user is not approved" do
+      SiteSetting.must_approve_users = true
+      expect(AnonymousShadowCreator.get(Fabricate.build(:user, approved: false))).to eq(nil)
     end
 
     it "returns a new shadow once time expires" do
@@ -30,6 +35,9 @@ describe AnonymousShadowCreator do
       freeze_time 4.minutes.from_now
       shadow3 = AnonymousShadowCreator.get(user)
 
+      expect(shadow3.user_option.email_digests).to eq(false)
+      expect(shadow3.user_option.email_private_messages).to eq(false)
+
       expect(shadow2.id).not_to eq(shadow3.id)
 
     end
@@ -45,7 +53,6 @@ describe AnonymousShadowCreator do
 
       expect(shadow.created_at).not_to eq(user.created_at)
 
-
       p = create_post
       expect(Guardian.new(shadow).post_can_act?(p, :like)).to eq(false)
       expect(Guardian.new(user).post_can_act?(p, :like)).to eq(true)
@@ -60,6 +67,11 @@ describe AnonymousShadowCreator do
       expect { AnonymousShadowCreator.get(user) }.to_not raise_error
     end
 
+    it "works when there is an email whitelist" do
+      SiteSetting.email_domains_whitelist = "wayne.com"
+
+      expect { AnonymousShadowCreator.get(user) }.to_not raise_error
+    end
   end
 
 end

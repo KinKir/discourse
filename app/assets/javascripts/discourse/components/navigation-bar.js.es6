@@ -1,54 +1,86 @@
-import DiscourseURL from 'discourse/lib/url';
+import {
+  default as computed,
+  observes
+} from "ember-addons/ember-computed-decorators";
+import DiscourseURL from "discourse/lib/url";
+import { renderedConnectorsFor } from "discourse/lib/plugin-connectors";
 
 export default Ember.Component.extend({
-  tagName: 'ul',
-  classNameBindings: [':nav', ':nav-pills'],
-  id: 'navigation-bar',
-  selectedNavItem: function(){
-    const filterMode = this.get('filterMode'),
-          navItems = this.get('navItems');
+  tagName: "ul",
+  classNameBindings: [":nav", ":nav-pills"],
+  elementId: "navigation-bar",
 
-    var item = navItems.find(function(i){
-      return i.get('filterMode').indexOf(filterMode) === 0;
-    });
+  init() {
+    this._super();
+    this.set("connectors", renderedConnectorsFor("extra-nav-item", null, this));
+  },
 
+  @computed("filterMode", "navItems")
+  selectedNavItem(filterMode, navItems) {
+    if (filterMode.indexOf("top/") === 0) {
+      filterMode = "top";
+    }
+    var item = navItems.find(
+      i => i.get("filterMode").indexOf(filterMode) === 0
+    );
+    if (!item) {
+      let connectors = this.get("connectors");
+      let category = this.get("category");
+      if (connectors && category) {
+        connectors.forEach(c => {
+          if (
+            c.connectorClass &&
+            typeof c.connectorClass.path === "function" &&
+            typeof (c.connectorClass.displayName === "function")
+          ) {
+            let path = c.connectorClass.path(category);
+            if (path.indexOf(filterMode) > 0) {
+              item = {
+                displayName: c.connectorClass.displayName()
+              };
+            }
+          }
+        });
+      }
+    }
     return item || navItems[0];
-  }.property('filterMode'),
+  },
 
-  closedNav: function(){
-    if (!this.get('expanded')) {
+  @observes("expanded")
+  closedNav() {
+    if (!this.get("expanded")) {
       this.ensureDropClosed();
     }
-  }.observes('expanded'),
+  },
 
-  ensureDropClosed: function(){
-    if (!this.get('expanded')) {
-      this.set('expanded',false);
+  ensureDropClosed() {
+    if (!this.get("expanded")) {
+      this.set("expanded", false);
     }
-    $(window).off('click.navigation-bar');
-    DiscourseURL.appEvents.off('dom:clean', this, this.ensureDropClosed);
+    $(window).off("click.navigation-bar");
+    DiscourseURL.appEvents.off("dom:clean", this, this.ensureDropClosed);
   },
 
   actions: {
-    toggleDrop: function(){
-      this.set('expanded', !this.get('expanded'));
-      var self = this;
-      if (this.get('expanded')) {
+    toggleDrop() {
+      this.set("expanded", !this.get("expanded"));
 
-        DiscourseURL.appEvents.on('dom:clean', this, this.ensureDropClosed);
+      if (this.get("expanded")) {
+        DiscourseURL.appEvents.on("dom:clean", this, this.ensureDropClosed);
 
-        Em.run.next(function() {
+        Em.run.next(() => {
+          if (!this.get("expanded")) {
+            return;
+          }
 
-          if (!self.get('expanded')) { return; }
-
-          self.$('.drop a').on('click', function(){
-            self.$('.drop').hide();
-            self.set('expanded', false);
+          this.$(".drop a").on("click", () => {
+            this.$(".drop").hide();
+            this.set("expanded", false);
             return true;
           });
 
-          $(window).on('click.navigation-bar', function() {
-            self.set('expanded', false);
+          $(window).on("click.navigation-bar", () => {
+            this.set("expanded", false);
             return true;
           });
         });

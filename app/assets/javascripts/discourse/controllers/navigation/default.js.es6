@@ -1,12 +1,8 @@
 export default Ember.Controller.extend({
-  needs: ['discovery', 'discovery/topics'],
+  discovery: Ember.inject.controller(),
+  discoveryTopics: Ember.inject.controller("discovery/topics"),
 
-  categories: function() {
-    return Discourse.Category.list();
-  }.property(),
-
-  navItems: function() {
-    return Discourse.NavItem.buildList(null, {filterMode: this.get('filterMode')});
-  }.property('filterMode')
-
+  draft: function() {
+    return this.get("discoveryTopics.model.draft");
+  }.property("discoveryTopics.model", "discoveryTopics.model.draft")
 });

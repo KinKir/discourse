@@ -1,42 +1,44 @@
-import Sharing from 'discourse/lib/sharing';
+import Sharing from "discourse/lib/sharing";
 
 export default {
-  name: 'sharing-sources',
+  name: "sharing-sources",
 
   initialize: function() {
-    // Backwards compatibility
-    Discourse.ShareLink = {};
-    Discourse.ShareLink.addTarget = function(id, source) {
-      Ember.warn('Discourse.ShareLink.addTarget is deprecated. Import `Sharing` and call `addSource` instead.');
-      source.id = id;
-      Sharing.addSource(source);
-    };
-
     Sharing.addSource({
-      id: 'twitter',
-      faIcon: 'fa-twitter-square',
+      id: "twitter",
+      icon: "fab-twitter-square",
       generateUrl: function(link, title) {
-        return "http://twitter.com/intent/tweet?url=" + encodeURIComponent(link) + "&text=" + encodeURIComponent(title);
+        return (
+          "http://twitter.com/intent/tweet?url=" +
+          encodeURIComponent(link) +
+          "&text=" +
+          encodeURIComponent(title)
+        );
       },
       shouldOpenInPopup: true,
-      title: I18n.t('share.twitter'),
+      title: I18n.t("share.twitter"),
       popupHeight: 265
     });
 
     Sharing.addSource({
-      id: 'facebook',
-      faIcon: 'fa-facebook-square',
-      title: I18n.t('share.facebook'),
+      id: "facebook",
+      icon: "fab-facebook-square",
+      title: I18n.t("share.facebook"),
       generateUrl: function(link, title) {
-        return "http://www.facebook.com/sharer.php?u=" + encodeURIComponent(link) + '&t=' + encodeURIComponent(title);
+        return (
+          "http://www.facebook.com/sharer.php?u=" +
+          encodeURIComponent(link) +
+          "&t=" +
+          encodeURIComponent(title)
+        );
       },
       shouldOpenInPopup: true
     });
 
     Sharing.addSource({
-      id: 'google+',
-      faIcon: 'fa-google-plus-square',
-      title: I18n.t('share.google+'),
+      id: "google+",
+      icon: "fab-google-plus-square",
+      title: I18n.t("share.google+"),
       generateUrl: function(link) {
         return "https://plus.google.com/share?url=" + encodeURIComponent(link);
       },
@@ -45,11 +47,18 @@ export default {
     });
 
     Sharing.addSource({
-      id: 'email',
-      faIcon: 'fa-envelope-square',
-      title: I18n.t('share.email'),
+      id: "email",
+      icon: "envelope-square",
+      title: I18n.t("share.email"),
       generateUrl: function(link, title) {
-        return "mailto:?to=&subject=" + encodeURIComponent('[' + Discourse.SiteSettings.title + '] ' + title) + "&body=" + encodeURIComponent(link);
+        return (
+          "mailto:?to=&subject=" +
+          encodeURIComponent(
+            "[" + Discourse.SiteSettings.title + "] " + title
+          ) +
+          "&body=" +
+          encodeURIComponent(link)
+        );
       }
     });
   }

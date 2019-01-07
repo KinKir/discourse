@@ -1,143 +1,105 @@
-import RestModel from 'discourse/models/rest';
-import { popupAjaxError } from 'discourse/lib/ajax-error';
+import { ajax } from "discourse/lib/ajax";
+import RestModel from "discourse/models/rest";
+import { popupAjaxError } from "discourse/lib/ajax-error";
 
 export default RestModel.extend({
-
-  // Description for the action
-  description: function() {
-    const action = this.get('actionType.name_key');
-    if (this.get('acted')) {
-      if (this.get('count') <= 1) {
-        return I18n.t('post.actions.by_you.' + action);
-      } else {
-        return I18n.t('post.actions.by_you_and_others.' + action, { count: this.get('count') - 1 });
-      }
-    } else {
-      return I18n.t('post.actions.by_others.' + action, { count: this.get('count') });
-    }
-  }.property('count', 'acted', 'actionType'),
-
-  usersCollapsed: Em.computed.not('usersExpanded'),
-  usersExpanded: Em.computed.gt('users.length', 0),
-
   canToggle: function() {
-    return this.get('can_undo') || this.get('can_act');
-  }.property('can_undo', 'can_act'),
+    return this.get("can_undo") || this.get("can_act");
+  }.property("can_undo", "can_act"),
 
   // Remove it
   removeAction: function() {
     this.setProperties({
       acted: false,
-      count: this.get('count') - 1,
+      count: this.get("count") - 1,
       can_act: true,
       can_undo: false
     });
-
-    if (this.get('usersExpanded')) {
-      this.get('users').removeObject(Discourse.User.current());
-    }
   },
 
-  toggle: function(post) {
-    if (!this.get('acted')) {
+  togglePromise(post) {
+    return this.get("acted") ? this.undo(post) : this.act(post);
+  },
+
+  toggle(post) {
+    if (!this.get("acted")) {
       this.act(post);
+      return true;
     } else {
       this.undo(post);
+      return false;
     }
   },
 
   // Perform this action
-  act: function(post, opts) {
-
+  act(post, opts) {
     if (!opts) opts = {};
 
-    const action = this.get('actionType.name_key');
+    const action = this.get("actionType.name_key");
 
     // Mark it as acted
     this.setProperties({
       acted: true,
-      count: this.get('count') + 1,
+      count: this.get("count") + 1,
       can_act: false,
       can_undo: true
     });
 
-    if (action === 'notify_moderators' || action === 'notify_user') {
-      this.set('can_undo',false);
-      this.set('can_defer_flags',false);
-    }
-
-    // Add ourselves to the users who liked it if present
-    if (this.get('usersExpanded')) {
-      this.get('users').addObject(Discourse.User.current());
+    if (action === "notify_moderators" || action === "notify_user") {
+      this.set("can_undo", false);
+      this.set("can_defer_flags", false);
     }
 
     // Create our post action
     const self = this;
-
-    return Discourse.ajax("/post_actions", {
-      type: 'POST',
+    return ajax("/post_actions", {
+      type: "POST",
       data: {
-        id: this.get('flagTopic') ? this.get('flagTopic.id') : post.get('id'),
-        post_action_type_id: this.get('id'),
+        id: this.get("flagTopic") ? this.get("flagTopic.id") : post.get("id"),
+        post_action_type_id: this.get("id"),
         message: opts.message,
+        is_warning: opts.isWarning,
         take_action: opts.takeAction,
-        flag_topic: this.get('flagTopic') ? true : false
-      }
-    }).then(function(result) {
-      if (!self.get('flagTopic')) {
-        return post.updateActionsSummary(result);
-      }
-    }).catch(function(error) {
-      popupAjaxError(error);
-      self.removeAction(post);
-    });
+        flag_topic: this.get("flagTopic") ? true : false
+      },
+      returnXHR: true
+    })
+      .then(function(data) {
+        if (!self.get("flagTopic")) {
+          post.updateActionsSummary(data.result);
+        }
+        const remaining = parseInt(
+          data.xhr.getResponseHeader("Discourse-Actions-Remaining") || 0
+        );
+        const max = parseInt(
+          data.xhr.getResponseHeader("Discourse-Actions-Max") || 0
+        );
+        return { acted: true, remaining, max };
+      })
+      .catch(function(error) {
+        popupAjaxError(error);
+        self.removeAction(post);
+      });
   },
 
   // Undo this action
-  undo: function(post) {
+  undo(post) {
     this.removeAction(post);
 
     // Remove our post action
-    return Discourse.ajax("/post_actions/" + post.get('id'), {
-      type: 'DELETE',
-      data: {
-        post_action_type_id: this.get('id')
-      }
-    }).then(function(result) {
-      return post.updateActionsSummary(result);
+    return ajax("/post_actions/" + post.get("id"), {
+      type: "DELETE",
+      data: { post_action_type_id: this.get("id") }
+    }).then(result => {
+      post.updateActionsSummary(result);
+      return { acted: false };
     });
   },
 
-  deferFlags: function(post) {
-    const self = this;
-    return Discourse.ajax("/post_actions/defer_flags", {
+  deferFlags(post) {
+    return ajax("/post_actions/defer_flags", {
       type: "POST",
-      data: {
-        post_action_type_id: this.get("id"),
-        id: post.get('id')
-      }
-    }).then(function () {
-      self.set("count", 0);
-    });
-  },
-
-  loadUsers: function(post) {
-    const self = this;
-    Discourse.ajax("/post_actions/users", {
-      data: {
-        id: post.get('id'),
-        post_action_type_id: this.get('id')
-      }
-    }).then(function (result) {
-      const users = [];
-      self.set('users', users);
-      result.forEach(function(user) {
-        if (user.id === Discourse.User.currentProp('id')) {
-          users.pushObject(Discourse.User.current());
-        } else {
-          users.pushObject(Discourse.User.create(user));
-        }
-      });
-    });
+      data: { post_action_type_id: this.get("id"), id: post.get("id") }
+    }).then(() => this.set("count", 0));
   }
 });

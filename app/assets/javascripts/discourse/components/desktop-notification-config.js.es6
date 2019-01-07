@@ -1,22 +1,35 @@
-import computed from 'ember-addons/ember-computed-decorators';
+import computed from "ember-addons/ember-computed-decorators";
+import KeyValueStore from "discourse/lib/key-value-store";
+import {
+  context,
+  confirmNotification
+} from "discourse/lib/desktop-notifications";
+import {
+  subscribe as subscribePushNotification,
+  unsubscribe as unsubscribePushNotification,
+  isPushNotificationsSupported,
+  keyValueStore as pushNotificationKeyValueStore,
+  userSubscriptionKey as pushNotificationUserSubscriptionKey
+} from "discourse/lib/push-notifications";
+
+const keyValueStore = new KeyValueStore(context);
 
 export default Ember.Component.extend({
-  classNames: ['controls'],
+  classNames: ["controls"],
 
-  @computed
-  notificationsPermission() {
-    if (this.get('isNotSupported')) return '';
-    return Notification.permission;
+  @computed("isNotSupported")
+  notificationsPermission(isNotSupported) {
+    return isNotSupported ? "" : Notification.permission;
   },
 
   @computed
   notificationsDisabled: {
     set(value) {
-      localStorage.setItem('notifications-disabled', value);
-      return localStorage.getItem('notifications-disabled');
+      keyValueStore.setItem("notifications-disabled", value);
+      return keyValueStore.getItem("notifications-disabled");
     },
     get() {
-      return localStorage.getItem('notifications-disabled');
+      return keyValueStore.getItem("notifications-disabled");
     }
   },
 
@@ -25,47 +38,84 @@ export default Ember.Component.extend({
     return typeof window.Notification === "undefined";
   },
 
-  isDefaultPermission: function() {
-    if (this.get('isNotSupported')) return false;
+  @computed("isNotSupported", "notificationsPermission")
+  isDeniedPermission(isNotSupported, notificationsPermission) {
+    return isNotSupported ? false : notificationsPermission === "denied";
+  },
 
-    return Notification.permission === "default";
-  }.property('isNotSupported', 'notificationsPermission'),
+  @computed("isNotSupported", "notificationsPermission")
+  isGrantedPermission(isNotSupported, notificationsPermission) {
+    return isNotSupported ? false : notificationsPermission === "granted";
+  },
 
-  isDeniedPermission: function() {
-    if (this.get('isNotSupported')) return false;
+  @computed("isGrantedPermission", "notificationsDisabled")
+  isEnabledDesktop(isGrantedPermission, notificationsDisabled) {
+    return isGrantedPermission ? !notificationsDisabled : false;
+  },
 
-    return Notification.permission === "denied";
-  }.property('isNotSupported', 'notificationsPermission'),
+  @computed
+  isEnabledPush: {
+    set(value) {
+      const user = this.currentUser;
+      if (!user) {
+        return false;
+      }
+      pushNotificationKeyValueStore.setItem(
+        pushNotificationUserSubscriptionKey(user),
+        value
+      );
+      return pushNotificationKeyValueStore.getItem(
+        pushNotificationUserSubscriptionKey(user)
+      );
+    },
+    get() {
+      const user = this.currentUser;
+      return user
+        ? pushNotificationKeyValueStore.getItem(
+            pushNotificationUserSubscriptionKey(user)
+          )
+        : false;
+    }
+  },
 
-  isGrantedPermission: function() {
-    if (this.get('isNotSupported')) return false;
+  isEnabled: Ember.computed.or("isEnabledDesktop", "isEnabledPush"),
 
-    return Notification.permission === "granted";
-  }.property('isNotSupported', 'notificationsPermission'),
-
-  isEnabled: function() {
-    if (!this.get('isGrantedPermission')) return false;
-
-    return !this.get('notificationsDisabled');
-  }.property('isGrantedPermission', 'notificationsDisabled'),
+  isPushNotificationsPreferred() {
+    if (!this.site.mobileView) {
+      return false;
+    }
+    return isPushNotificationsSupported(this.site.mobileView);
+  },
 
   actions: {
-    requestPermission() {
-      const self = this;
-      Notification.requestPermission(function() {
-        self.propertyDidChange('notificationsPermission');
-      });
-    },
     recheckPermission() {
-      this.propertyDidChange('notificationsPermission');
+      this.propertyDidChange("notificationsPermission");
     },
+
     turnoff() {
-      this.set('notificationsDisabled', 'disabled');
-      this.propertyDidChange('notificationsPermission');
+      if (this.get("isEnabledDesktop")) {
+        this.set("notificationsDisabled", "disabled");
+        this.propertyDidChange("notificationsPermission");
+      }
+      if (this.get("isEnabledPush")) {
+        unsubscribePushNotification(this.currentUser, () => {
+          this.set("isEnabledPush", "");
+        });
+      }
     },
+
     turnon() {
-      this.set('notificationsDisabled', '');
-      this.propertyDidChange('notificationsPermission');
+      if (this.isPushNotificationsPreferred()) {
+        subscribePushNotification(() => {
+          this.set("isEnabledPush", "subscribed");
+        }, this.siteSettings.vapid_public_key_bytes);
+      } else {
+        this.set("notificationsDisabled", "");
+        Notification.requestPermission(() => {
+          confirmNotification();
+          this.propertyDidChange("notificationsPermission");
+        });
+      }
     }
   }
 });

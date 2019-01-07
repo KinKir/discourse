@@ -1,14 +1,38 @@
+import showModal from "discourse/lib/show-modal";
+
 export default Discourse.Route.extend({
-  actions: {
-    didTransition() { return true; }
+  titleToken() {
+    return I18n.t("groups.members.title");
   },
 
-  model() {
-    return this.modelFor("group").findPosts();
+  model(params) {
+    this._params = params;
+    return this.modelFor("group");
   },
 
   setupController(controller, model) {
-    controller.set("model", model);
-    this.controllerFor("group").set("showing", "index");
+    this.controllerFor("group").set("showing", "members");
+
+    controller.setProperties({
+      model,
+      filterInput: this._params.filter
+    });
+
+    controller.refreshMembers();
+  },
+
+  actions: {
+    showAddMembersModal() {
+      showModal("group-add-members", { model: this.modelFor("group") });
+    },
+
+    showBulkAddModal() {
+      showModal("group-bulk-add", { model: this.modelFor("group") });
+    },
+
+    didTransition() {
+      this.controllerFor("group-index").set("filterInput", this._params.filter);
+      return true;
+    }
   }
 });

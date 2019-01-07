@@ -1,3 +1,4 @@
-{{#each model.content as |item|}}
-  {{stream-item item=item removeBookmark="removeBookmark"}}
-{{/each}}
+{{#if model.noContent}}
+  <div class='alert alert-info'>{{{model.noContentHelp}}}</div>
+{{/if}}
+{{user-stream stream=model}}

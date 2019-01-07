@@ -1,114 +1,173 @@
-import DiscourseURL from 'discourse/lib/url';
+import { ajax } from "discourse/lib/ajax";
+import DiscourseURL from "discourse/lib/url";
+import { wantsNewWindow } from "discourse/lib/intercept-click";
+import { selectedText } from "discourse/lib/utilities";
+
+export function isValidLink($link) {
+  return (
+    $link.hasClass("track-link") ||
+    $link.closest(".hashtag,.badge-category,.onebox-result,.onebox-body")
+      .length === 0
+  );
+}
 
 export default {
   trackClick(e) {
+    // right clicks are not tracked
+    if (e.which === 3) {
+      return true;
+    }
+
     // cancel click if triggered as part of selection.
-    if (Discourse.Utilities.selectedText() !== "") { return false; }
-
-    var $link = $(e.currentTarget);
-    if ($link.hasClass('lightbox')) { return true; }
-
-    var href = $link.attr('href') || $link.data('href'),
-        $article = $link.closest('article'),
-        postId = $article.data('post-id'),
-        topicId = $('#topic').data('topic-id'),
-        userId = $link.data('user-id');
-
-    if (!href || href.trim().length === 0) { return; }
-
-    if (!userId) userId = $article.data('user-id');
-
-    var ownLink = userId && (userId === Discourse.User.currentProp('id')),
-        trackingUrl = Discourse.getURL("/clicks/track?url=" + encodeURIComponent(href));
-    if (postId && (!$link.data('ignore-post-id'))) {
-      trackingUrl += "&post_id=" + encodeURI(postId);
-    }
-    if (topicId) {
-      trackingUrl += "&topic_id=" + encodeURI(topicId);
+    if (selectedText() !== "") {
+      return false;
     }
 
-    // Update badge clicks unless it's our own
-    if (!ownLink) {
-      var $badge = $('span.badge', $link);
-      if ($badge.length === 1) {
-        // don't update counts in category badge nor in oneboxes (except when we force it)
-        if ($link.hasClass("track-link") ||
-            $link.closest('.badge-category,.onebox-result,.onebox-body').length === 0) {
-          var html = $badge.html();
-          if (/^\d+$/.test(html)) { $badge.html(parseInt(html, 10) + 1); }
+    const $link = $(e.currentTarget);
+
+    // don't track
+    //   - lightboxes
+    //   - group mentions
+    //   - links with disabled tracking
+    //   - category links
+    //   - quote back button
+    if (
+      $link.is(".lightbox, .mention-group, .no-track-link, .hashtag, .back")
+    ) {
+      return true;
+    }
+
+    // don't track links in quotes or in elided part
+    let tracking = $link.parents("aside.quote, .elided").length === 0;
+
+    let href = $link.attr("href") || $link.data("href");
+
+    if (!href || href.trim().length === 0) {
+      return false;
+    }
+    if (href.indexOf("mailto:") === 0) {
+      return true;
+    }
+
+    const $article = $link.closest(
+      "article:not(.onebox-body), .excerpt, #revisions"
+    );
+    const postId = $article.data("post-id");
+    const topicId = $("#topic").data("topic-id") || $article.data("topic-id");
+    const userId = $link.data("user-id") || $article.data("user-id");
+    const ownLink = userId && userId === Discourse.User.currentProp("id");
+
+    let destUrl = href;
+
+    if (tracking) {
+      destUrl = Discourse.getURL(
+        "/clicks/track?url=" + encodeURIComponent(href)
+      );
+
+      if (postId && !$link.data("ignore-post-id")) {
+        destUrl += "&post_id=" + encodeURI(postId);
+      }
+      if (topicId) {
+        destUrl += "&topic_id=" + encodeURI(topicId);
+      }
+
+      // Update badge clicks unless it's our own
+      if (!ownLink) {
+        const $badge = $("span.badge", $link);
+        if ($badge.length === 1) {
+          // don't update counts in category badge nor in oneboxes (except when we force it)
+          if (isValidLink($link)) {
+            const html = $badge.html();
+            const key = `${new Date().toLocaleDateString()}-${postId}-${href}`;
+            if (/^\d+$/.test(html) && !sessionStorage.getItem(key)) {
+              sessionStorage.setItem(key, true);
+              $badge.html(parseInt(html, 10) + 1);
+            }
+          }
         }
       }
     }
 
-    // If they right clicked, change the destination href
-    if (e.which === 3) {
-      var destination = Discourse.SiteSettings.track_external_right_clicks ? trackingUrl : href;
-      $link.attr('href', destination);
-      return true;
-    }
-
     // if they want to open in a new tab, do an AJAX request
-    if (e.shiftKey || e.metaKey || e.ctrlKey || e.which === 2) {
-      Discourse.ajax("/clicks/track", {
+    if (tracking && wantsNewWindow(e)) {
+      ajax("/clicks/track", {
         data: {
           url: href,
           post_id: postId,
           topic_id: topicId,
           redirect: false
         },
-        dataType: 'html'
+        dataType: "html"
       });
       return true;
     }
 
     e.preventDefault();
 
-    // We don't track clicks on quote back buttons
-    if ($link.hasClass('back') || $link.hasClass('quote-other-topic')) { return true; }
-
     // Remove the href, put it as a data attribute
-    if (!$link.data('href')) {
-      $link.addClass('no-href');
-      $link.data('href', $link.attr('href'));
-      $link.attr('href', null);
+    if (!$link.data("href")) {
+      $link.addClass("no-href");
+      $link.data("href", $link.attr("href"));
+      $link.attr("href", null);
       // Don't route to this URL
-      $link.data('auto-route', true);
+      $link.data("auto-route", true);
     }
 
     // restore href
-    setTimeout(() => {
-      $link.removeClass('no-href');
-      $link.attr('href', $link.data('href'));
-      $link.data('href', null);
+    Ember.run.later(() => {
+      $link.removeClass("no-href");
+      $link.attr("href", $link.data("href"));
+      $link.data("href", null);
     }, 50);
 
     // warn the user if they can't download the file
-    if (Discourse.SiteSettings.prevent_anons_from_downloading_files && $link.hasClass("attachment") && !Discourse.User.current()) {
+    if (
+      Discourse.SiteSettings.prevent_anons_from_downloading_files &&
+      $link.hasClass("attachment") &&
+      !Discourse.User.current()
+    ) {
       bootbox.alert(I18n.t("post.errors.attachment_download_requires_login"));
       return false;
     }
 
+    const isInternal = DiscourseURL.isInternal(href);
+
+    const modifierLeftClicked = (e.ctrlKey || e.metaKey) && e.which === 1;
+    const middleClicked = e.which === 2;
+    const openExternalInNewTab = Discourse.User.currentProp(
+      "external_links_in_new_tab"
+    );
+
+    const openWindow =
+      modifierLeftClicked ||
+      middleClicked ||
+      (!isInternal && openExternalInNewTab);
+
     // If we're on the same site, use the router and track via AJAX
-    if (DiscourseURL.isInternal(href) && !$link.hasClass('attachment')) {
-      Discourse.ajax("/clicks/track", {
-        data: {
-          url: href,
-          post_id: postId,
-          topic_id: topicId,
-          redirect: false
-        },
-        dataType: 'html'
-      });
-      DiscourseURL.routeTo(href);
+    if (isInternal && !$link.hasClass("attachment")) {
+      if (tracking) {
+        ajax("/clicks/track", {
+          data: {
+            url: href,
+            post_id: postId,
+            topic_id: topicId,
+            redirect: false
+          },
+          dataType: "html"
+        });
+      }
+      if (openWindow) {
+        window.open(destUrl, "_blank").focus();
+      } else {
+        DiscourseURL.routeTo(href);
+      }
       return false;
     }
 
-    // Otherwise, use a custom URL with a redirect
-    if (Discourse.User.currentProp('external_links_in_new_tab')) {
-      var win = window.open(trackingUrl, '_blank');
-      win.focus();
+    if (openWindow) {
+      window.open(destUrl, "_blank").focus();
     } else {
-      DiscourseURL.redirectTo(trackingUrl);
+      DiscourseURL.redirectTo(destUrl);
     }
 
     return false;

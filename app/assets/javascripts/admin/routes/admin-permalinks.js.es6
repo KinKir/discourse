@@ -1,9 +1,11 @@
+import Permalink from "admin/models/permalink";
+
 export default Discourse.Route.extend({
   model() {
-    return Discourse.Permalink.findAll();
+    return Permalink.findAll();
   },
 
   setupController(controller, model) {
-    controller.set('model', model);
+    controller.set("model", model);
   }
 });

@@ -1,21 +1,7 @@
 require 'execjs'
-require 'babel/transpiler'
+require 'mini_racer'
 
 module Tilt
-
-  class Console
-    def initialize(prefix=nil)
-      @prefix = prefix || ''
-    end
-
-    def log(msg)
-      Rails.logger.info("#{@prefix}#{msg}")
-    end
-
-    def error(msg)
-      Rails.logger.error("#{@prefix}#{msg}")
-    end
-  end
 
   class ES6ModuleTranspilerTemplate < Tilt::Template
     self.default_mime_type = 'application/javascript'
@@ -23,17 +9,47 @@ module Tilt
     @mutex = Mutex.new
     @ctx_init = Mutex.new
 
+    def self.call(input)
+      filename = input[:filename]
+      source = input[:data]
+      context = input[:environment].context_class.new(input)
+
+      result = new(filename) { source }.render(context)
+      context.metadata.merge(data: result)
+    end
+
     def prepare
       # intentionally left empty
       # Tilt requires this method to be defined
     end
 
     def self.create_new_context
-      ctx = V8::Context.new(timeout: 5000)
-      ctx.eval("var self = this; #{File.read(Babel::Transpiler.script_path)}")
-      ctx.eval("module = {}; exports = {};");
-      ctx.load("#{Rails.root}/lib/es6_module_transpiler/support/es6-module-transpiler.js")
+      # timeout any eval that takes longer than 15 seconds
+      ctx = MiniRacer::Context.new(timeout: 15000)
+      ctx.eval("var self = this; #{File.read("#{Rails.root}/vendor/assets/javascripts/babel.js")}")
+      ctx.eval(File.read(Ember::Source.bundled_path_for('ember-template-compiler.js')))
+      ctx.eval("module = {}; exports = {};")
+      ctx.attach("rails.logger.info", proc { |err| Rails.logger.info(err.to_s) })
+      ctx.attach("rails.logger.error", proc { |err| Rails.logger.error(err.to_s) })
+      ctx.eval <<JS
+      console = {
+        prefix: "",
+        log: function(msg){ rails.logger.info(console.prefix + msg); },
+        error: function(msg){ rails.logger.error(console.prefix + msg); }
+      }
+
+JS
+      source = File.read("#{Rails.root}/lib/javascripts/widget-hbs-compiler.js.es6")
+      js_source = ::JSON.generate(source, quirks_mode: true)
+      js = ctx.eval("Babel.transform(#{js_source}, { ast: false, plugins: ['check-es2015-constants', 'transform-es2015-arrow-functions', 'transform-es2015-block-scoped-functions', 'transform-es2015-block-scoping', 'transform-es2015-classes', 'transform-es2015-computed-properties', 'transform-es2015-destructuring', 'transform-es2015-duplicate-keys', 'transform-es2015-for-of', 'transform-es2015-function-name', 'transform-es2015-literals', 'transform-es2015-object-super', 'transform-es2015-parameters', 'transform-es2015-shorthand-properties', 'transform-es2015-spread', 'transform-es2015-sticky-regex', 'transform-es2015-template-literals', 'transform-es2015-typeof-symbol', 'transform-es2015-unicode-regex'] }).code")
+      ctx.eval(js)
+
       ctx
+    end
+
+    def self.reset_context
+      @ctx&.dispose
+      @ctx = nil
     end
 
     def self.v8
@@ -59,19 +75,50 @@ module Tilt
     end
 
     def self.protect
-      rval = nil
       @mutex.synchronize do
-        begin
-          rval = yield
-          # This may seem a bit odd, but we don't want to leak out
-          # objects that require locks on the v8 vm, to get a backtrace
-          # you need a lock, if this happens in the wrong spot you can
-          # deadlock a process
-        rescue V8::Error => e
-          raise JavaScriptError.new(e.message, e.backtrace)
-        end
+        yield
       end
-      rval
+    end
+
+    def whitelisted?(path)
+
+      @@whitelisted ||= Set.new(
+        ["discourse/models/nav-item",
+         "discourse/models/user-action",
+         "discourse/routes/discourse",
+         "discourse/models/category",
+         "discourse/models/trust-level",
+         "discourse/models/site",
+         "discourse/models/user",
+         "discourse/models/session",
+         "discourse/models/model",
+         "discourse/models/topic",
+         "discourse/models/post",
+         "discourse/views/grouped"]
+      )
+
+      @@whitelisted.include?(path) || path =~ /discourse\/mixins/
+    end
+
+    def babel_transpile(source)
+      klass = self.class
+      klass.protect do
+        klass.v8.eval("console.prefix = 'BABEL: babel-eval: ';")
+        @output = klass.v8.eval(babel_source(source))
+      end
+    end
+
+    def module_transpile(source, root_path, logical_path)
+      klass = self.class
+      klass.protect do
+        klass.v8.eval("console.prefix = 'BABEL: babel-eval: ';")
+        transpiled = babel_source(
+          source,
+          module_name: module_name(root_path, logical_path),
+          filename: logical_path
+        )
+        @output = klass.v8.eval(transpiled)
+      end
     end
 
     def evaluate(scope, locals, &block)
@@ -79,14 +126,21 @@ module Tilt
 
       klass = self.class
       klass.protect do
-        klass.v8['console'] = Console.new("BABEL: #{scope.logical_path}: ")
-        @output = klass.v8.eval(generate_source(scope))
+        klass.v8.eval("console.prefix = 'BABEL: #{scope.logical_path}: ';")
+
+        source = babel_source(
+          data,
+          module_name: module_name(scope.root_path, scope.logical_path),
+          filename: scope.logical_path
+        )
+
+        @output = klass.v8.eval(source)
       end
 
       # For backwards compatibility with plugins, for now export the Global format too.
       # We should eventually have an upgrade system for plugins to use ES6 or some other
       # resolve based API.
-      if ENV['DISCOURSE_NO_CONSTANTS'].nil? &&
+      if whitelisted?(scope.logical_path) &&
         scope.logical_path =~ /(discourse|admin)\/(controllers|components|views|routes|mixins|models)\/(.*)/
 
         type = Regexp.last_match[2]
@@ -119,12 +173,23 @@ module Tilt
       @output
     end
 
+    def babel_source(source, opts = nil)
+      opts ||= {}
+
+      js_source = ::JSON.generate(source, quirks_mode: true)
+
+      if opts[:module_name] && transpile_into_module?
+        filename = opts[:filename] || 'unknown'
+        "Babel.transform(#{js_source}, { moduleId: '#{opts[:module_name]}', filename: '#{filename}', ast: false, presets: ['es2015'], plugins: [['transform-es2015-modules-amd', {noInterop: true}], 'transform-decorators-legacy', exports.WidgetHbsCompiler] }).code"
+      else
+        "Babel.transform(#{js_source}, { ast: false, plugins: ['check-es2015-constants', 'transform-es2015-arrow-functions', 'transform-es2015-block-scoped-functions', 'transform-es2015-block-scoping', 'transform-es2015-classes', 'transform-es2015-computed-properties', 'transform-es2015-destructuring', 'transform-es2015-duplicate-keys', 'transform-es2015-for-of', 'transform-es2015-function-name', 'transform-es2015-literals', 'transform-es2015-object-super', 'transform-es2015-parameters', 'transform-es2015-shorthand-properties', 'transform-es2015-spread', 'transform-es2015-sticky-regex', 'transform-es2015-template-literals', 'transform-es2015-typeof-symbol', 'transform-es2015-unicode-regex', 'transform-regenerator', 'transform-decorators-legacy', exports.WidgetHbsCompiler] }).code"
+      end
+    end
+
     private
 
-    def generate_source(scope)
-      js_source = ::JSON.generate(data, quirks_mode: true)
-      js_source = "babel.transform(#{js_source}, {ast: false, whitelist: ['es6.constants', 'es6.properties.shorthand', 'es6.arrowFunctions', 'es6.blockScoping', 'es6.destructuring', 'es6.spread', 'es6.parameters', 'es6.templateLiterals', 'es6.regex.unicode', 'es7.decorators']})['code']"
-      "new module.exports.Compiler(#{js_source}, '#{module_name(scope.root_path, scope.logical_path)}', #{compiler_options}).#{compiler_method}()"
+    def transpile_into_module?
+      file.nil? || file.exclude?('.no-module')
     end
 
     def module_name(root_path, logical_path)
@@ -135,7 +200,7 @@ module Tilt
       if root_path =~ /(.*\/#{root_base}\/plugins\/[^\/]+)\//
         plugin_path = "#{Regexp.last_match[1]}/plugin.rb"
 
-        plugin = Discourse.plugins.find {|p| p.path == plugin_path }
+        plugin = Discourse.plugins.find { |p| p.path == plugin_path }
         path = "discourse/plugins/#{plugin.name}/#{logical_path.sub(/javascripts\//, '')}" if plugin
       end
 

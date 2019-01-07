@@ -1,18 +1,23 @@
+import AdminUser from "admin/models/admin-user";
+
 export default Discourse.Route.extend({
   serialize(model) {
-    return { username: model.get('username').toLowerCase() };
+    return {
+      user_id: model.get("id"),
+      username: model.get("username").toLowerCase()
+    };
   },
 
   model(params) {
-    return Discourse.AdminUser.find(Em.get(params, 'username').toLowerCase());
+    return AdminUser.find(Em.get(params, "user_id"));
   },
 
   renderTemplate() {
-    this.render({into: 'admin'});
+    this.render({ into: "admin" });
   },
 
   afterModel(adminUser) {
-    return adminUser.loadDetails().then(function () {
+    return adminUser.loadDetails().then(function() {
       adminUser.setOriginalTrustLevel();
       return adminUser;
     });

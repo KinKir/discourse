@@ -1,14 +1,18 @@
 <div class='embeddable-hosts'>
   {{#if embedding.embeddable_hosts}}
-    <table class='embedding'>
-      <tr>
-        <th style='width: 50%'>{{i18n "admin.embedding.host"}}</th>
-        <th style='width: 30%'>{{i18n "admin.embedding.category"}}</th>
-        <th style='width: 20%'>&nbsp;</th>
-      </tr>
+    <table class='embedding grid'>
+      <thead>
+        <th style='width: 25%'>{{i18n "admin.embedding.host"}}</th>
+        <th style='width: 15%'>{{i18n "admin.embedding.class_name"}}</th>
+        <th style='width: 25%'>{{i18n "admin.embedding.path_whitelist"}}</th>
+        <th style='width: 25%'>{{i18n "admin.embedding.category"}}</th>
+        <th style='width: 10%'>&nbsp;</th>
+      </thead>
+      <tbody>
       {{#each embedding.embeddable_hosts as |host|}}
         {{embeddable-host host=host deleteHost="deleteHost"}}
       {{/each}}
+      </tbody>
     </table>
   {{else}}
     <p>{{i18n "admin.embedding.get_started"}}</p>
@@ -30,6 +34,9 @@
 
     {{embedding-setting field="embed_by_username" value=embedding.embed_by_username}}
     {{embedding-setting field="embed_post_limit" value=embedding.embed_post_limit}}
+    {{embedding-setting field="embed_title_scrubber"
+                        value=embedding.embed_title_scrubber
+                        placeholder="- site.com$"}}
     {{embedding-setting field="embed_truncate" value=embedding.embed_truncate type="checkbox"}}
   </div>
 
@@ -39,6 +46,7 @@
 
     {{embedding-setting field="feed_polling_enabled" value=embedding.feed_polling_enabled type="checkbox"}}
     {{embedding-setting field="feed_polling_url" value=embedding.feed_polling_url}}
+    {{embedding-setting field="feed_polling_frequency_mins" value=embedding.feed_polling_frequency_mins}}
     {{embedding-setting field="embed_username_key_from_feed" value=embedding.embed_username_key_from_feed}}
   </div>
 
@@ -46,8 +54,17 @@
     <h3>{{i18n "admin.embedding.crawling_settings"}}</h3>
     <p class="description">{{i18n "admin.embedding.crawling_description"}}</p>
 
-    {{embedding-setting field="embed_whitelist_selector" value=embedding.embed_whitelist_selector}}
-    {{embedding-setting field="embed_blacklist_selector" value=embedding.embed_blacklist_selector}}
+    {{embedding-setting field="embed_whitelist_selector"
+                        value=embedding.embed_whitelist_selector
+                        placeholder="article, #story, .post"}}
+
+    {{embedding-setting field="embed_blacklist_selector"
+                        value=embedding.embed_blacklist_selector
+                        placeholder=".ad-unit, header"}}
+
+    {{embedding-setting field="embed_classname_whitelist"
+                        value=embedding.embed_classname_whitelist
+                        placeholder="emoji, classname"}}
   </div>
 
   <div class='embedding-secondary'>

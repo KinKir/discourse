@@ -1,65 +1,59 @@
-# This script pulls translation files from Transifex and ensures they are in the format we need.
-# You need the Transifex client installed.
-# http://docs.transifex.com/developer/client/setup
-#
-# Don't use this script to create pull requests. Do translations in Transifex. The Discourse
-# team will pull them in.
+#!/usr/bin/env ruby
 
-require 'open3'
+require 'bundler/inline'
 
-if `which tx`.strip.empty?
-  puts '', 'The Transifex client needs to be installed to use this script.'
-  puts 'Instructions are here: http://docs.transifex.com/developer/client/setup'
-  puts '', 'On Mac:', ''
-  puts '  curl -O https://raw.github.com/pypa/pip/master/contrib/get-pip.py'
-  puts '  sudo python get-pip.py'
-  puts '  sudo pip install transifex-client', ''
-  exit 1
+gemfile(true) do
+  gem 'translations-manager', git: 'https://github.com/discourse/translations-manager.git'
 end
 
-locales = Dir.glob(File.expand_path('../../config/locales/client.*.yml', __FILE__)).map {|x| x.split('.')[-2]}.select {|x| x != 'en'}.sort.join(',')
+require 'translations_manager'
 
-puts 'Pulling new translations...', ''
-command = "tx pull --mode=developer --language=#{locales} #{ARGV.include?('force') ? '-f' : ''}"
-
-Open3.popen2e(command) do |stdin, stdout_err, wait_thr|
-  while (line = stdout_err.gets)
-    puts line
-  end
-end
-puts ''
-
-unless $?.success?
-  puts 'Something failed. Check the output above.', ''
-  exit $?.exitstatus
+def expand_path(path)
+  File.expand_path("../../#{path}", __FILE__)
 end
 
-YML_FILE_COMMENTS = <<END
-# encoding: utf-8
-#
-# Never edit this file. It will be overwritten when translations are pulled from Transifex.
-#
-# To work with us on translations, join this project:
-# https://www.transifex.com/projects/p/discourse-org/
-END
+def supported_locales
+  Dir.glob(expand_path('config/locales/client.*.yml'))
+    .map { |x| x.split('.')[-2] }
+    .select { |x| x != 'en' }
+    .sort - TranslationsManager::BROKEN_LOCALES
+end
 
 YML_DIRS = ['config/locales',
             'plugins/poll/config/locales',
-            'vendor/gems/discourse_imgur/lib/discourse_imgur/locale']
+            'plugins/discourse-details/config/locales',
+            'plugins/discourse-local-dates/config/locales',
+            'plugins/discourse-narrative-bot/config/locales',
+            'plugins/discourse-nginx-performance-report/config/locales',
+            'plugins/discourse-presence/config/locales'].map { |dir| expand_path(dir) }
+YML_FILE_PREFIXES = ['server', 'client']
+TX_CONFIG = expand_path('.tx/config')
+JS_LOCALE_DIR = expand_path('app/assets/javascripts/locales')
 
-# Add comments to the top of files
-['client', 'server'].each do |base|
-  YML_DIRS.each do |dir|
-    Dir.glob(File.expand_path("../../#{dir}/#{base}.*.yml", __FILE__)).each do |file_name|
-      language = File.basename(file_name).match(Regexp.new("#{base}\\.([^\\.]*)\\.yml"))[1]
+if ARGV.empty? && TranslationsManager::SUPPORTED_LOCALES != supported_locales
+  STDERR.puts <<~MESSAGE
 
-      lines = File.readlines(file_name)
-      lines.collect! {|line| line =~ /^[a-z_]+:$/i ? "#{language}:" : line}
+    The supported locales are out of sync.
+    Please update the TranslationsManager::SUPPORTED_LOCALES in translations-manager.
+    https://github.com/discourse/translations-manager
 
-      File.open(file_name, 'w+') do |f|
-        f.puts(YML_FILE_COMMENTS, '') unless lines[0][0] == '#'
-        f.puts(lines)
-      end
-    end
-  end
+    The following locales are currently supported by Discourse:
+
+  MESSAGE
+
+  STDERR.puts supported_locales.map { |l| "'#{l}'" }.join(",\n")
+  exit 1
+end
+
+TranslationsManager::TransifexUpdater.new(YML_DIRS, YML_FILE_PREFIXES, *ARGV).perform(tx_config_filename: TX_CONFIG)
+
+TranslationsManager::SUPPORTED_LOCALES.each do |locale|
+  filename = File.join(JS_LOCALE_DIR, "#{locale}.js.erb")
+  next if File.exists?(filename)
+
+  File.write(filename, <<~ERB)
+    //= depend_on 'client.#{locale}.yml'
+    //= require locales/i18n
+    <%= JsLocaleHelper.output_locale(:#{locale}) %>
+  ERB
 end

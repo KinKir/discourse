@@ -1,5 +1,5 @@
 class PostJobsEnqueuer
-  def initialize(post, topic, new_topic, opts={})
+  def initialize(post, topic, new_topic, opts = {})
     @post = post
     @topic = topic
     @new_topic = new_topic
@@ -7,8 +7,8 @@ class PostJobsEnqueuer
   end
 
   def enqueue_jobs
-    # We need to enqueue jobs after the transaction. Otherwise they might begin before the data has
-    # been comitted.
+    # We need to enqueue jobs after the transaction.
+    # Otherwise they might begin before the data has been comitted.
     enqueue_post_alerts unless @opts[:import_mode]
     feature_topic_users unless @opts[:import_mode]
     trigger_post_post_process
@@ -17,12 +17,20 @@ class PostJobsEnqueuer
       after_post_create
       after_topic_create
     end
+
+    if @topic.private_message?
+      TopicTrackingState.publish_private_message(@topic, post: @post)
+    end
   end
 
   private
 
   def enqueue_post_alerts
-    Jobs.enqueue(:post_alert, post_id: @post.id)
+    Jobs.enqueue(:post_alert,
+      post_id: @post.id,
+      new_record: true,
+      options: @opts[:post_alert_options],
+    )
   end
 
   def feature_topic_users
@@ -35,12 +43,11 @@ class PostJobsEnqueuer
 
   def after_post_create
     TopicTrackingState.publish_unread(@post) if @post.post_number > 1
-    TopicTrackingState.publish_latest(@topic)
+    TopicTrackingState.publish_latest(@topic, @post.whisper?)
 
-    Jobs.enqueue_in(
-        SiteSetting.email_time_window_mins.minutes,
-        :notify_mailing_list_subscribers,
-        post_id: @post.id
+    Jobs.enqueue_in(SiteSetting.email_time_window_mins.minutes,
+      :notify_mailing_list_subscribers,
+      post_id: @post.id,
     )
   end
 

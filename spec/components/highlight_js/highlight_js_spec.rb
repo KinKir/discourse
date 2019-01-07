@@ -1,4 +1,4 @@
-require 'spec_helper'
+require 'rails_helper'
 require_dependency 'highlight_js/highlight_js'
 
 describe HighlightJs do
@@ -12,7 +12,6 @@ describe HighlightJs do
     expect(bundle).to match(/http/)
     expect(bundle).not_to match(/applescript/)
   end
-
 
   it 'can get a version string' do
     version1 = HighlightJs.version("http|cpp")

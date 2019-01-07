@@ -1,52 +1,68 @@
 class Admin::GroupsController < Admin::AdminController
-
-  def index
-    groups = Group.order(:name)
-
-    if search = params[:search]
-      search = search.to_s
-      groups = groups.where("name ILIKE ?", "%#{search}%")
-    end
-
-    if params[:ignore_automatic].to_s == "true"
-      groups = groups.where(automatic: false)
-    end
-
-    render_serialized(groups, BasicGroupSerializer)
+  def bulk
   end
 
-  def show
-    render nothing: true
+  def bulk_perform
+    group = Group.find_by(id: params[:group_id].to_i)
+    raise Discourse::NotFound unless group
+    users_added = 0
+
+    users = (params[:users] || []).map { |user| user.downcase!; user }
+    valid_emails = {}
+    valid_usernames = {}
+
+    valid_users = User.joins(:user_emails)
+      .where("username_lower IN (:users) OR lower(user_emails.email) IN (:users)", users: users)
+      .pluck(:id, :username_lower, :"user_emails.email")
+
+    valid_users.map! do |id, username_lower, email|
+      valid_emails[email] = valid_usernames[username_lower] = id
+      id
+    end
+
+    valid_users.uniq!
+    invalid_users = users.reject { |u| valid_emails[u] || valid_usernames[u] }
+    group.bulk_add(valid_users) if valid_users.present?
+    users_added = valid_users.count
+
+    response = success_json.merge(users_not_added: invalid_users)
+
+    if users_added > 0
+      response[:message] = I18n.t('groups.success.bulk_add', count: users_added)
+    end
+
+    render json: response
   end
 
   def create
-    group = Group.new
+    attributes = group_params.to_h.except(:owner_usernames, :usernames)
+    group = Group.new(attributes)
 
-    group.name = (params[:name] || '').strip
-    save_group(group)
-  end
+    unless group_params[:allow_membership_requests]
+      group.membership_request_template = nil
+    end
 
-  def update
-    group = Group.find(params[:id])
+    if group_params[:owner_usernames].present?
+      owner_ids = User.where(
+        username: group_params[:owner_usernames].split(",")
+      ).pluck(:id)
 
-    # group rename is ignored for automatic groups
-    group.name = params[:name] if params[:name] && !group.automatic
-    save_group(group)
-  end
+      owner_ids.each do |user_id|
+        group.group_users.build(user_id: user_id, owner: true)
+      end
+    end
 
-  def save_group(group)
-    group.alias_level = params[:alias_level].to_i if params[:alias_level].present?
-    group.visible = params[:visible] == "true"
+    if group_params[:usernames].present?
+      user_ids = User.where(username: group_params[:usernames].split(",")).pluck(:id)
+      user_ids -= owner_ids if owner_ids
 
-    group.automatic_membership_email_domains = params[:automatic_membership_email_domains] unless group.automatic
-    group.automatic_membership_retroactive = params[:automatic_membership_retroactive] == "true" unless group.automatic
-
-    group.primary_group = group.automatic ? false : params["primary_group"] == "true"
-
-    title = params[:title] if params[:title].present?
-    group.title = group.automatic ? nil : title
+      user_ids.each do |user_id|
+        group.group_users.build(user_id: user_id)
+      end
+    end
 
     if group.save
+      group.restore_user_count!
       render_serialized(group, BasicGroupSerializer)
     else
       render_json_error group
@@ -54,76 +70,87 @@ class Admin::GroupsController < Admin::AdminController
   end
 
   def destroy
-    group = Group.find(params[:id])
+    group = Group.find_by(id: params[:id])
+    raise Discourse::NotFound unless group
 
     if group.automatic
       can_not_modify_automatic
     else
-      group.destroy
+      group.destroy!
       render json: success_json
     end
   end
 
-  def refresh_automatic_groups
-    Group.refresh_automatic_groups!
-    render json: success_json
-  end
-
-  def add_members
-    group = Group.find(params.require(:id))
+  def add_owners
+    group = Group.find_by(id: params.require(:id))
+    raise Discourse::NotFound unless group
 
     return can_not_modify_automatic if group.automatic
-
-    if params[:usernames].present?
-      users = User.where(username: params[:usernames].split(","))
-    elsif params[:user_ids].present?
-      users = User.find(params[:user_ids].split(","))
-    else
-      raise Discourse::InvalidParameters.new('user_ids or usernames must be present')
-    end
+    users = User.where(username: group_params[:usernames].split(","))
 
     users.each do |user|
+      group_action_logger = GroupActionLogger.new(current_user, group)
+
       if !group.users.include?(user)
         group.add(user)
-      else
-        return render_json_error I18n.t('groups.errors.member_already_exist', username: user.username)
+        group_action_logger.log_add_user_to_group(user)
       end
+      group.group_users.where(user_id: user.id).update_all(owner: true)
+      group_action_logger.log_make_user_group_owner(user)
     end
 
-    if group.save
-      render json: success_json
-    else
-      render_json_error(group)
-    end
+    group.restore_user_count!
+
+    render json: success_json.merge!(usernames: users.pluck(:username))
   end
 
-  def remove_member
-    group = Group.find(params.require(:id))
+  def remove_owner
+    group = Group.find_by(id: params.require(:id))
+    raise Discourse::NotFound unless group
 
     return can_not_modify_automatic if group.automatic
 
-    if params[:user_id].present?
-      user = User.find(params[:user_id])
-    elsif params[:username].present?
-      user = User.find_by_username(params[:username])
-    else
-      raise Discourse::InvalidParameters.new('user_id or username must be present')
-    end
+    user = User.find(params[:user_id].to_i)
+    group.group_users.where(user_id: user.id).update_all(owner: false)
+    GroupActionLogger.new(current_user, group).log_remove_user_as_group_owner(user)
 
-    user.primary_group_id = nil if user.primary_group_id == group.id
+    Group.reset_counters(group.id, :group_users)
 
-    group.users.delete(user.id)
-
-    if group.save && user.save
-      render json: success_json
-    else
-      render_json_error(group)
-    end
+    render json: success_json
   end
 
   protected
 
-    def can_not_modify_automatic
-      render json: {errors: I18n.t('groups.errors.can_not_modify_automatic')}, status: 422
-    end
+  def can_not_modify_automatic
+    render json: { errors: I18n.t('groups.errors.can_not_modify_automatic') }, status: 422
+  end
+
+  private
+
+  def group_params
+    params.require(:group).permit(
+      :name,
+      :mentionable_level,
+      :messageable_level,
+      :visibility_level,
+      :automatic_membership_email_domains,
+      :automatic_membership_retroactive,
+      :title,
+      :primary_group,
+      :grant_trust_level,
+      :incoming_email,
+      :flair_url,
+      :flair_bg_color,
+      :flair_color,
+      :bio_raw,
+      :public_admission,
+      :public_exit,
+      :allow_membership_requests,
+      :full_name,
+      :default_notification_level,
+      :membership_request_template,
+      :owner_usernames,
+      :usernames
+    )
+  end
 end

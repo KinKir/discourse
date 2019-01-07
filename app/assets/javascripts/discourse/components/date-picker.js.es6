@@ -1,30 +1,66 @@
 /* global Pikaday:true */
 import loadScript from "discourse/lib/load-script";
+import {
+  default as computed,
+  on
+} from "ember-addons/ember-computed-decorators";
 
-export default Em.Component.extend({
-  tagName: "input",
-  classNames: ["date-picker"],
+export default Ember.Component.extend({
+  classNames: ["date-picker-wrapper"],
   _picker: null,
 
-  _loadDatePicker: function() {
-    const self = this,
-          input = this.$()[0];
+  @on("didInsertElement")
+  _loadDatePicker() {
+    const input = this.$(".date-picker")[0];
+    const container = $("#" + this.get("containerId"))[0];
 
-    loadScript("/javascripts/pikaday.js").then(function() {
-      self._picker = new Pikaday({
-        field: input,
-        format: "YYYY-MM-DD",
-        defaultDate: moment().add(1, "day").toDate(),
-        minDate: new Date(),
-        onSelect: function(date) {
-          self.set("value", moment(date).format("YYYY-MM-DD"));
-        },
+    loadScript("/javascripts/pikaday.js").then(() => {
+      Ember.run.next(() => {
+        let default_opts = {
+          field: input,
+          container: container || this.$()[0],
+          bound: container === undefined,
+          format: "YYYY-MM-DD",
+          firstDay: 1,
+          i18n: {
+            previousMonth: I18n.t("dates.previous_month"),
+            nextMonth: I18n.t("dates.next_month"),
+            months: moment.months(),
+            weekdays: moment.weekdays(),
+            weekdaysShort: moment.weekdaysShort()
+          },
+          onSelect: date => {
+            const formattedDate = moment(date).format("YYYY-MM-DD");
+
+            if (this.attrs.onSelect) {
+              this.attrs.onSelect(formattedDate);
+            }
+
+            if (!this.element || this.isDestroying || this.isDestroyed) return;
+
+            this.set("value", formattedDate);
+          }
+        };
+
+        this._picker = new Pikaday(_.merge(default_opts, this._opts()));
       });
     });
-  }.on("didInsertElement"),
+  },
 
-  _destroy: function() {
+  @on("willDestroyElement")
+  _destroy() {
+    if (this._picker) {
+      this._picker.destroy();
+    }
     this._picker = null;
-  }.on("willDestroyElement"),
+  },
 
+  @computed()
+  placeholder() {
+    return I18n.t("dates.placeholder");
+  },
+
+  _opts() {
+    return null;
+  }
 });

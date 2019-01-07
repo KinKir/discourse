@@ -1,11 +1,24 @@
 require_dependency 'rate_limiter'
 
 class AboutController < ApplicationController
-  skip_before_filter :check_xhr, only: [:show]
+
+  requires_login only: [:live_post_counts]
+
+  skip_before_action :check_xhr, only: [:index]
 
   def index
+    return redirect_to path('/login') if SiteSetting.login_required? && current_user.nil?
+
     @about = About.new
-    render_serialized(@about, AboutSerializer)
+    @title = "#{I18n.t("js.about.simple_title")} - #{SiteSetting.title}"
+    respond_to do |format|
+      format.html do
+        render :index
+      end
+      format.json do
+        render_serialized(@about, AboutSerializer)
+      end
+    end
   end
 
   def live_post_counts

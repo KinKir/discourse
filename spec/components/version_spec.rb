@@ -1,4 +1,4 @@
-require 'spec_helper'
+require 'rails_helper'
 require 'version'
 
 describe Discourse::VERSION do
@@ -37,4 +37,3 @@ describe Discourse::VERSION do
 
   end
 end
-
